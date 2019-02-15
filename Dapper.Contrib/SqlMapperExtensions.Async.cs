@@ -1,4 +1,5 @@
-﻿using System;
+﻿#if !NET40
+using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Linq;
@@ -40,9 +41,9 @@ namespace Dapper.Contrib.Extensions
             if (!type.IsInterface())
                 return (await connection.QueryAsync<T>(sql, dynParms, transaction, commandTimeout).ConfigureAwait(false)).FirstOrDefault();
 
-            var res = (await connection.QueryAsync<dynamic>(sql, dynParms).ConfigureAwait(false)).FirstOrDefault() as IDictionary<string, object>;
+            IDictionary<string, object> res = (await connection.QueryAsync<dynamic>(sql, dynParms).ConfigureAwait(false)).FirstOrDefault() as IDictionary<string, object>;
 
-            if (res == null)
+            if (!((await connection.QueryAsync<dynamic>(sql, dynParms).ConfigureAwait(false)).FirstOrDefault() is IDictionary<string, object>))
                 return null;
 
             var obj = ProxyGenerator.GetInterfaceProxy<T>();
@@ -313,7 +314,7 @@ namespace Dapper.Contrib.Extensions
             sb.AppendFormat("DELETE FROM {0} WHERE ", name);
 
             var adapter = GetFormatter(connection);
-            
+
             for (var i = 0; i < keyProperties.Count; i++)
             {
                 var property = keyProperties[i];
@@ -575,3 +576,5 @@ public partial class FbAdapter
         return Convert.ToInt32(id);
     }
 }
+
+#endif

@@ -192,9 +192,7 @@ namespace Dapper.Contrib.Extensions
 
             if (type.IsInterface())
             {
-                var res = connection.Query(sql, dynParms).FirstOrDefault() as IDictionary<string, object>;
-
-                if (res == null)
+                if (!(connection.Query(sql, dynParms).FirstOrDefault() is IDictionary<string, object> res))
                     return null;
 
                 obj = ProxyGenerator.GetInterfaceProxy<T>();
@@ -296,14 +294,21 @@ namespace Dapper.Contrib.Extensions
                 var info = type;
 #endif
                 //NOTE: This as dynamic trick falls back to handle both our own Table-attribute as well as the one in EntityFramework 
-                var tableAttrName =
+#if NET40
+                var tableAttr = info.GetCustomAttributes(false).SingleOrDefault(attr => attr.GetType().Name == "TableAttribute") as dynamic;
+                if (tableAttr != null)
+                {
+                    name = tableAttr.Name;
+                }
+#else
+                string tableAttrName =
                     info.GetCustomAttribute<TableAttribute>(false)?.Name
                     ?? (info.GetCustomAttributes(false).FirstOrDefault(attr => attr.GetType().Name == "TableAttribute") as dynamic)?.Name;
-
                 if (tableAttrName != null)
                 {
                     name = tableAttrName;
                 }
+#endif
                 else
                 {
                     name = type.Name + "s";
@@ -338,6 +343,10 @@ namespace Dapper.Contrib.Extensions
             }
             else if (type.IsGenericType())
             {
+#if NET40
+                isList = true;
+                type = type.GetGenericArguments()[0];
+#else
                 var typeInfo = type.GetTypeInfo();
                 bool implementsGenericIEnumerableOrIsGenericIEnumerable =
                     typeInfo.ImplementedInterfaces.Any(ti => ti.IsGenericType() && ti.GetGenericTypeDefinition() == typeof(IEnumerable<>)) ||
@@ -348,6 +357,7 @@ namespace Dapper.Contrib.Extensions
                     isList = true;
                     type = type.GetGenericArguments()[0];
                 }
+#endif
             }
 
             var name = GetTableName(type);
@@ -419,6 +429,9 @@ namespace Dapper.Contrib.Extensions
             }
             else if (type.IsGenericType())
             {
+#if NET40
+                type = type.GetGenericArguments()[0];
+#else
                 var typeInfo = type.GetTypeInfo();
                 bool implementsGenericIEnumerableOrIsGenericIEnumerable =
                     typeInfo.ImplementedInterfaces.Any(ti => ti.IsGenericType() && ti.GetGenericTypeDefinition() == typeof(IEnumerable<>)) ||
@@ -428,6 +441,7 @@ namespace Dapper.Contrib.Extensions
                 {
                     type = type.GetGenericArguments()[0];
                 }
+#endif
             }
 
             var keyProperties = KeyPropertiesCache(type).ToList();  //added ToList() due to issue #418, must work on a list copy
@@ -488,6 +502,9 @@ namespace Dapper.Contrib.Extensions
             }
             else if (type.IsGenericType())
             {
+#if NET40
+                type = type.GetGenericArguments()[0];
+#else
                 var typeInfo = type.GetTypeInfo();
                 bool implementsGenericIEnumerableOrIsGenericIEnumerable =
                     typeInfo.ImplementedInterfaces.Any(ti => ti.IsGenericType() && ti.GetGenericTypeDefinition() == typeof(IEnumerable<>)) ||
@@ -497,6 +514,7 @@ namespace Dapper.Contrib.Extensions
                 {
                     type = type.GetGenericArguments()[0];
                 }
+#endif
             }
 
             var keyProperties = KeyPropertiesCache(type).ToList();  //added ToList() due to issue #418, must work on a list copy
