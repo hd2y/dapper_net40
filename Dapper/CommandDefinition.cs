@@ -11,6 +11,10 @@ namespace Dapper
     /// </summary>
     public struct CommandDefinition
     {
+        /// <summary>
+        /// on object construction event.
+        /// </summary>
+        public static event Action<CommandDefinition> OnConstruction;
         internal static CommandDefinition ForCallback(object parameters)
         {
             if (parameters is DynamicParameters)
@@ -95,6 +99,8 @@ namespace Dapper
             CommandType = commandType;
             Flags = flags;
             CancellationToken = cancellationToken;
+
+            OnConstruction?.BeginInvoke(this, null, null);
         }
 
         private CommandDefinition(object parameters) : this()
