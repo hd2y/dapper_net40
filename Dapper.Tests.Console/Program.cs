@@ -13,25 +13,39 @@ namespace Dapper.Tests.Console
     {
         static void Main(string[] args)
         {
-            DbProviderFactory dbProvider = Type.GetType("System.Data.OracleClient.OracleClientFactory, System.Data.OracleClient, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089").GetField("Instance", BindingFlags.Public | BindingFlags.Static).GetValue(null) as DbProviderFactory;
-            CommandDefinition.OnConstruction += (c) =>
+            try
             {
-                string text = c.CommandText;
-                System.Console.WriteLine(text);
-            };
-            using (IDbConnection connection = dbProvider.CreateConnection())
+                CommandDefinition.OnConstruction += (c) =>
+                {
+                    System.Console.WriteLine(Newtonsoft.Json.JsonConvert.SerializeObject(c, Newtonsoft.Json.Formatting.Indented));
+                };
+                OracleTests tests = new OracleTests("System.Data.OracleClient.OracleClientFactory, System.Data.OracleClient, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089", "Data Source=CRDS3DB_5;User Id=userhita170524;Password=hishita;");
+
+                #region 实体CRUD测试
+                //string msg = string.Empty;
+                //bool result = tests.Test(ref msg);
+                //if (result == true)
+                //{
+                //    result = tests.TestList(ref msg);
+                //}
+                //if (result)
+                //{
+                //    System.Console.WriteLine("Oracle 数据库CRUD测试成功");
+                //}
+                //else
+                //{
+                //    System.Console.WriteLine($"Oracle 数据库CRUD测试失败:{msg}");
+                //} 
+                #endregion
+
+                tests.TestPaged();
+
+            }
+            catch (Exception exc)
             {
-                connection.ConnectionString = "***";
-                connection.GetAll<X_CANSHUDENGJI>();
+                System.Console.WriteLine($"测试出现了未经处理的异常：{exc.Message}\r\n{exc.StackTrace}");
             }
             System.Console.ReadKey();
         }
-    }
-
-    [Table("X_CANSHUDENGJI")]
-    public class X_CANSHUDENGJI
-    {
-        [Key]
-        public string CANSHUDENGJIID { get; set; }
     }
 }

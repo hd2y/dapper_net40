@@ -14,7 +14,7 @@ namespace Dapper
         /// <summary>
         /// on object construction event.
         /// </summary>
-        public static event Action<CommandDefinition> OnConstruction;
+        public static event Action<object> OnConstruction;
         internal static CommandDefinition ForCallback(object parameters)
         {
             if (parameters is DynamicParameters)
@@ -100,7 +100,7 @@ namespace Dapper
             Flags = flags;
             CancellationToken = cancellationToken;
 
-            OnConstruction?.BeginInvoke(this, null, null);
+            OnConstruction?.Invoke(new { CommandText, Parameters, Transaction = Transaction?.GetHashCode(), CommandTimeout, CommandType, Flags, CancellationToken = CancellationToken.GetHashCode() });
         }
 
         private CommandDefinition(object parameters) : this()

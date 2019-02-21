@@ -73,7 +73,8 @@ namespace Dapper.Contrib.Extensions
                 ["npgsqlconnection"] = new PostgresAdapter(),
                 ["sqliteconnection"] = new SQLiteAdapter(),
                 ["mysqlconnection"] = new MySqlAdapter(),
-                ["fbconnection"] = new FbAdapter()
+                ["fbconnection"] = new FbAdapter(),
+                ["oracleconnection"] = new OracleAdapter()
             };
 
         private static List<PropertyInfo> ComputedPropertiesCache(Type type)
@@ -161,6 +162,42 @@ namespace Dapper.Contrib.Extensions
         }
 
         /// <summary>
+        /// 分页查询
+        /// </summary>
+        /// <typeparam name="T">用于创建和填充数据的接口或类型</typeparam>
+        /// <param name="connection">数据库链接</param>
+        /// <param name="page">当前页码</param>
+        /// <param name="take">每页记录数</param>
+        /// <param name="sql">sql 语句</param>
+        /// <param name="param">参数</param>
+        /// <param name="transaction">事务</param>
+        /// <param name="buffered">缓存结果</param>
+        /// <param name="commandTimeout">超时时间</param>
+        /// <param name="commandType">命令类型</param>
+        /// <returns></returns>
+        public static Paged<T> QueryPage<T>(this IDbConnection connection, int page, int take, string sql, object param = null, IDbTransaction transaction = null, bool buffered = true, int? commandTimeout = null, CommandType? commandType = null) where T : class
+        {
+            if (take < 1 || take > 10000)
+                throw new ArgumentOutOfRangeException(nameof(take));
+            if (page < 1)
+                throw new ArgumentOutOfRangeException(nameof(page));
+            var adapter = GetFormatter(connection);
+            string pageSql = adapter.PagingBuild(sql, page, take);
+            string pageCountSql = adapter.PagingCountBuild(sql);
+            long totalCount = connection.QueryFirstOrDefault<long>(pageCountSql, param, transaction, commandTimeout, commandType);
+            List<T> items = connection.Query<T>(pageSql, param, transaction, buffered, commandTimeout, commandType).ToList();
+            Paged<T> paged = new Paged<T>
+            {
+                TotalItems = totalCount,
+                TotalPages = (int)((totalCount + take - 1) / take),
+                Items = items,
+                CurrentPage = page,
+                ItemsPerPage = take
+            };
+            return paged;
+        }
+
+        /// <summary>
         /// Returns a single entity by a single id from table "Ts".  
         /// Id must be marked with [Key] attribute.
         /// Entities created from interfaces are tracked/intercepted for changes and used by the Update() extension
@@ -175,18 +212,20 @@ namespace Dapper.Contrib.Extensions
         public static T Get<T>(this IDbConnection connection, dynamic id, IDbTransaction transaction = null, int? commandTimeout = null) where T : class
         {
             var type = typeof(T);
-
+            var adapter = GetFormatter(connection);
+            StringBuilder parmsName = new StringBuilder();
+            adapter.AppendDbParameterName(parmsName, "id");
             if (!GetQueries.TryGetValue(type.TypeHandle, out string sql))
             {
                 var key = GetSingleKey<T>(nameof(Get));
                 var name = GetTableName(type);
 
-                sql = $"select * from {name} where {key.Name} = @id";
+                sql = $"select * from {name} where {key.Name} = {parmsName.ToString()}";
                 GetQueries[type.TypeHandle] = sql;
             }
 
             var dynParms = new DynamicParameters();
-            dynParms.Add("@id", id);
+            dynParms.Add(parmsName.ToString(), id);
 
             T obj;
 
@@ -365,7 +404,8 @@ namespace Dapper.Contrib.Extensions
             var allProperties = TypePropertiesCache(type);
             var keyProperties = KeyPropertiesCache(type);
             var computedProperties = ComputedPropertiesCache(type);
-            var allPropertiesExceptKeyAndComputed = allProperties.Except(keyProperties.Union(computedProperties)).ToList();
+            var isIncrementKey = keyProperties.Count == 1 && (keyProperties[0].PropertyType == typeof(int) || keyProperties[0].PropertyType == typeof(long) || keyProperties[0].PropertyType == typeof(uint) || keyProperties[0].PropertyType == typeof(ulong));
+            var allPropertiesExceptKeyAndComputed = isIncrementKey ? allProperties.Except(keyProperties.Union(computedProperties)).ToList() : allProperties.Except(computedProperties).ToList();
 
             var adapter = GetFormatter(connection);
 
@@ -381,7 +421,7 @@ namespace Dapper.Contrib.Extensions
             for (var i = 0; i < allPropertiesExceptKeyAndComputed.Count; i++)
             {
                 var property = allPropertiesExceptKeyAndComputed[i];
-                sbParameterList.AppendFormat("@{0}", property.Name);
+                adapter.AppendDbParameterName(sbParameterList, property.Name);
                 if (i < allPropertiesExceptKeyAndComputed.Count - 1)
                     sbParameterList.Append(", ");
             }
@@ -390,7 +430,7 @@ namespace Dapper.Contrib.Extensions
             var wasClosed = connection.State == ConnectionState.Closed;
             if (wasClosed) connection.Open();
 
-            if (!isList)    //single entity
+            if (!isList && isIncrementKey)    //单个实体并且主键为自增
             {
                 returnVal = adapter.Insert(connection, transaction, commandTimeout, name, sbColumnList.ToString(),
                     sbParameterList.ToString(), keyProperties, entityToInsert);
@@ -725,6 +765,38 @@ namespace Dapper.Contrib.Extensions
     }
 
     /// <summary>
+    /// 分页封装类
+    /// </summary>
+    /// <typeparam name="T"></typeparam>
+    public class Paged<T> where T : class
+    {
+        /// <summary>
+        /// 当前页码
+        /// </summary>
+        public int CurrentPage { get; set; }
+
+        /// <summary>
+        /// 总页数
+        /// </summary>
+        public int TotalPages { get; set; }
+
+        /// <summary>
+        /// 总记录数
+        /// </summary>
+        public long TotalItems { get; set; }
+
+        /// <summary>
+        /// 每页记录数
+        /// </summary>
+        public int ItemsPerPage { get; set; }
+
+        /// <summary>
+        /// 当前页记录列表
+        /// </summary>
+        public List<T> Items { get; set; }
+    }
+
+    /// <summary>
     /// Defines the name of a table to use in Dapper.Contrib commands.
     /// </summary>
     [AttributeUsage(AttributeTargets.Class)]
@@ -812,17 +884,41 @@ public partial interface ISqlAdapter
     int Insert(IDbConnection connection, IDbTransaction transaction, int? commandTimeout, string tableName, string columnList, string parameterList, IEnumerable<PropertyInfo> keyProperties, object entityToInsert);
 
     /// <summary>
+    /// Adds the database parameter name of a column.
+    /// </summary>
+    /// <param name="sb">The string builder  to append to.</param>
+    /// <param name="columnName">The column name.</param>
+    void AppendDbParameterName(StringBuilder sb, string columnName);
+
+    /// <summary>
     /// Adds the name of a column.
     /// </summary>
     /// <param name="sb">The string builder  to append to.</param>
     /// <param name="columnName">The column name.</param>
     void AppendColumnName(StringBuilder sb, string columnName);
+
     /// <summary>
     /// Adds a column equality to a parameter.
     /// </summary>
     /// <param name="sb">The string builder  to append to.</param>
     /// <param name="columnName">The column name.</param>
     void AppendColumnNameEqualsValue(StringBuilder sb, string columnName);
+
+    /// <summary>
+    /// 获取分页 sql 语句
+    /// </summary>
+    /// <param name="sql">原始 sql 语句</param>
+    /// <param name="page">查询页码</param>
+    /// <param name="take">每页记录数</param>
+    /// <returns>分页查询 sql 语句</returns>
+    string PagingBuild(string sql, long page, long take);
+
+    /// <summary>
+    /// 获取分页查询总记录数 sql 语句
+    /// </summary>
+    /// <param name="sql">原始 sql 语句</param>
+    /// <returns>总记录数 sql 语句</returns>
+    string PagingCountBuild(string sql);
 }
 
 /// <summary>
@@ -861,6 +957,16 @@ public partial class SqlServerAdapter : ISqlAdapter
     }
 
     /// <summary>
+    /// Adds the database parameter name of a column.
+    /// </summary>
+    /// <param name="sb">The string builder  to append to.</param>
+    /// <param name="columnName">The column name.</param>
+    public void AppendDbParameterName(StringBuilder sb, string columnName)
+    {
+        sb.AppendFormat("@{0}", columnName);
+    }
+
+    /// <summary>
     /// Adds the name of a column.
     /// </summary>
     /// <param name="sb">The string builder  to append to.</param>
@@ -878,6 +984,28 @@ public partial class SqlServerAdapter : ISqlAdapter
     public void AppendColumnNameEqualsValue(StringBuilder sb, string columnName)
     {
         sb.AppendFormat("[{0}] = @{1}", columnName, columnName);
+    }
+
+    /// <summary>
+    /// 获取分页 sql 语句(SQL Server 2012 +)
+    /// </summary>
+    /// <param name="sql">原始 sql 语句</param>
+    /// <param name="page">查询页码</param>
+    /// <param name="take">每页记录数</param>
+    /// <returns>分页查询 sql 语句</returns>
+    public string PagingBuild(string sql, long page, long take)
+    {
+        return sql = $"{sql.TrimEnd().Trim(';')} OFFSET {take * (page - 1)} ROWS FETCH NEXT {take} ROWS ONLY ";
+    }
+
+    /// <summary>
+    /// 获取分页查询总记录数 sql 语句
+    /// </summary>
+    /// <param name="sql">原始 sql 语句</param>
+    /// <returns>总记录数 sql 语句</returns>
+    public string PagingCountBuild(string sql)
+    {
+        return sql = $"SELECT COUNT(1) FROM ({sql.TrimEnd().Trim(';')}) TAB_PAGED_COUNT";
     }
 }
 
@@ -917,6 +1045,16 @@ public partial class SqlCeServerAdapter : ISqlAdapter
     }
 
     /// <summary>
+    /// Adds the database parameter name of a column.
+    /// </summary>
+    /// <param name="sb">The string builder  to append to.</param>
+    /// <param name="columnName">The column name.</param>
+    public void AppendDbParameterName(StringBuilder sb, string columnName)
+    {
+        sb.AppendFormat("@{0}", columnName);
+    }
+
+    /// <summary>
     /// Adds the name of a column.
     /// </summary>
     /// <param name="sb">The string builder  to append to.</param>
@@ -934,6 +1072,28 @@ public partial class SqlCeServerAdapter : ISqlAdapter
     public void AppendColumnNameEqualsValue(StringBuilder sb, string columnName)
     {
         sb.AppendFormat("[{0}] = @{1}", columnName, columnName);
+    }
+
+    /// <summary>
+    /// 获取分页 sql 语句(SQL Server Compact 4.0 +)
+    /// </summary>
+    /// <param name="sql">原始 sql 语句</param>
+    /// <param name="page">查询页码</param>
+    /// <param name="take">每页记录数</param>
+    /// <returns>分页查询 sql 语句</returns>
+    public string PagingBuild(string sql, long page, long take)
+    {
+        return sql = $"{sql.TrimEnd().Trim(';')} OFFSET {take * (page - 1)} ROWS FETCH NEXT {take} ROWS ONLY ";
+    }
+
+    /// <summary>
+    /// 获取分页查询总记录数 sql 语句
+    /// </summary>
+    /// <param name="sql">原始 sql 语句</param>
+    /// <returns>总记录数 sql 语句</returns>
+    public string PagingCountBuild(string sql)
+    {
+        return sql = $"SELECT COUNT(1) FROM ({sql.TrimEnd().Trim(';')}) TAB_PAGED_COUNT";
     }
 }
 
@@ -972,6 +1132,16 @@ public partial class MySqlAdapter : ISqlAdapter
     }
 
     /// <summary>
+    /// Adds the database parameter name of a column.
+    /// </summary>
+    /// <param name="sb">The string builder  to append to.</param>
+    /// <param name="columnName">The column name.</param>
+    public void AppendDbParameterName(StringBuilder sb, string columnName)
+    {
+        sb.AppendFormat("@{0}", columnName);
+    }
+
+    /// <summary>
     /// Adds the name of a column.
     /// </summary>
     /// <param name="sb">The string builder  to append to.</param>
@@ -989,6 +1159,28 @@ public partial class MySqlAdapter : ISqlAdapter
     public void AppendColumnNameEqualsValue(StringBuilder sb, string columnName)
     {
         sb.AppendFormat("`{0}` = @{1}", columnName, columnName);
+    }
+
+    /// <summary>
+    /// 获取分页 sql 语句
+    /// </summary>
+    /// <param name="sql">原始 sql 语句</param>
+    /// <param name="page">查询页码</param>
+    /// <param name="take">每页记录数</param>
+    /// <returns>分页查询 sql 语句</returns>
+    public string PagingBuild(string sql, long page, long take)
+    {
+        return sql = $"{sql.TrimEnd().Trim(';')} LIMIT {take * (page - 1)},{take}";
+    }
+
+    /// <summary>
+    /// 获取分页查询总记录数 sql 语句
+    /// </summary>
+    /// <param name="sql">原始 sql 语句</param>
+    /// <returns>总记录数 sql 语句</returns>
+    public string PagingCountBuild(string sql)
+    {
+        return sql = $"SELECT COUNT(1) FROM ({sql.TrimEnd().Trim(';')}) TAB_PAGED_COUNT";
     }
 }
 
@@ -1048,6 +1240,16 @@ public partial class PostgresAdapter : ISqlAdapter
     }
 
     /// <summary>
+    /// Adds the database parameter name of a column.
+    /// </summary>
+    /// <param name="sb">The string builder  to append to.</param>
+    /// <param name="columnName">The column name.</param>
+    public void AppendDbParameterName(StringBuilder sb, string columnName)
+    {
+        sb.AppendFormat("@{0}", columnName);
+    }
+
+    /// <summary>
     /// Adds the name of a column.
     /// </summary>
     /// <param name="sb">The string builder  to append to.</param>
@@ -1065,6 +1267,28 @@ public partial class PostgresAdapter : ISqlAdapter
     public void AppendColumnNameEqualsValue(StringBuilder sb, string columnName)
     {
         sb.AppendFormat("\"{0}\" = @{1}", columnName, columnName);
+    }
+
+    /// <summary>
+    /// 获取分页 sql 语句
+    /// </summary>
+    /// <param name="sql">原始 sql 语句</param>
+    /// <param name="page">查询页码</param>
+    /// <param name="take">每页记录数</param>
+    /// <returns>分页查询 sql 语句</returns>
+    public string PagingBuild(string sql, long page, long take)
+    {
+        return sql = $"{sql.TrimEnd().Trim(';')} LIMIT {take} OFFSET {take * (page - 1)}";
+    }
+
+    /// <summary>
+    /// 获取分页查询总记录数 sql 语句
+    /// </summary>
+    /// <param name="sql">原始 sql 语句</param>
+    /// <returns>总记录数 sql 语句</returns>
+    public string PagingCountBuild(string sql)
+    {
+        return sql = $"SELECT COUNT(1) FROM ({sql.TrimEnd().Trim(';')}) TAB_PAGED_COUNT";
     }
 }
 
@@ -1101,6 +1325,16 @@ public partial class SQLiteAdapter : ISqlAdapter
     }
 
     /// <summary>
+    /// Adds the database parameter name of a column.
+    /// </summary>
+    /// <param name="sb">The string builder  to append to.</param>
+    /// <param name="columnName">The column name.</param>
+    public void AppendDbParameterName(StringBuilder sb, string columnName)
+    {
+        sb.AppendFormat("@{0}", columnName);
+    }
+
+    /// <summary>
     /// Adds the name of a column.
     /// </summary>
     /// <param name="sb">The string builder  to append to.</param>
@@ -1118,6 +1352,28 @@ public partial class SQLiteAdapter : ISqlAdapter
     public void AppendColumnNameEqualsValue(StringBuilder sb, string columnName)
     {
         sb.AppendFormat("\"{0}\" = @{1}", columnName, columnName);
+    }
+
+    /// <summary>
+    /// 获取分页 sql 语句
+    /// </summary>
+    /// <param name="sql">原始 sql 语句</param>
+    /// <param name="page">查询页码</param>
+    /// <param name="take">每页记录数</param>
+    /// <returns>分页查询 sql 语句</returns>
+    public string PagingBuild(string sql, long page, long take)
+    {
+        return sql = $"{sql.TrimEnd().Trim(';')} LIMIT {take} OFFSET {take * (page - 1)}";
+    }
+
+    /// <summary>
+    /// 获取分页查询总记录数 sql 语句
+    /// </summary>
+    /// <param name="sql">原始 sql 语句</param>
+    /// <returns>总记录数 sql 语句</returns>
+    public string PagingCountBuild(string sql)
+    {
+        return sql = $"SELECT COUNT(1) FROM ({sql.TrimEnd().Trim(';')}) TAB_PAGED_COUNT";
     }
 }
 
@@ -1158,6 +1414,16 @@ public partial class FbAdapter : ISqlAdapter
     }
 
     /// <summary>
+    /// Adds the database parameter name of a column.
+    /// </summary>
+    /// <param name="sb">The string builder  to append to.</param>
+    /// <param name="columnName">The column name.</param>
+    public void AppendDbParameterName(StringBuilder sb, string columnName)
+    {
+        sb.AppendFormat("@{0}", columnName);
+    }
+
+    /// <summary>
     /// Adds the name of a column.
     /// </summary>
     /// <param name="sb">The string builder  to append to.</param>
@@ -1175,5 +1441,102 @@ public partial class FbAdapter : ISqlAdapter
     public void AppendColumnNameEqualsValue(StringBuilder sb, string columnName)
     {
         sb.AppendFormat("{0} = @{1}", columnName, columnName);
+    }
+
+    /// <summary>
+    /// 获取分页 sql 语句
+    /// </summary>
+    /// <param name="sql">原始 sql 语句</param>
+    /// <param name="page">查询页码</param>
+    /// <param name="take">每页记录数</param>
+    /// <returns>分页查询 sql 语句</returns>
+    public string PagingBuild(string sql, long page, long take)
+    {
+        return sql = $"{sql.TrimEnd().Trim(';')} ROWS {(take * (page - 1)) + 1} TO {take * page}";
+    }
+
+    /// <summary>
+    /// 获取分页查询总记录数 sql 语句
+    /// </summary>
+    /// <param name="sql">原始 sql 语句</param>
+    /// <returns>总记录数 sql 语句</returns>
+    public string PagingCountBuild(string sql)
+    {
+        return sql = $"SELECT COUNT(1) FROM ({sql.TrimEnd().Trim(';')}) TAB_PAGED_COUNT";
+    }
+}
+
+/// <summary>
+/// The Oracle SQL adapeter.
+/// </summary>
+public partial class OracleAdapter : ISqlAdapter
+{
+    /// <summary>
+    /// Inserts <paramref name="entityToInsert"/> into the database, returning the Id of the row created.
+    /// </summary>
+    /// <param name="connection">The connection to use.</param>
+    /// <param name="transaction">The transaction to use.</param>
+    /// <param name="commandTimeout">The command timeout to use.</param>
+    /// <param name="tableName">The table to insert into.</param>
+    /// <param name="columnList">The columns to set with this insert.</param>
+    /// <param name="parameterList">The parameters to set for this insert.</param>
+    /// <param name="keyProperties">The key columns in this table.</param>
+    /// <param name="entityToInsert">The entity to insert.</param>
+    /// <returns>The Id of the row created.</returns>
+    public int Insert(IDbConnection connection, IDbTransaction transaction, int? commandTimeout, string tableName, string columnList, string parameterList, IEnumerable<PropertyInfo> keyProperties, object entityToInsert)
+    {
+        throw new ArgumentException("Oracle数据库不支持自增主键");
+    }
+
+    /// <summary>
+    /// Adds the database parameter name of a column.
+    /// </summary>
+    /// <param name="sb">The string builder  to append to.</param>
+    /// <param name="columnName">The column name.</param>
+    public void AppendDbParameterName(StringBuilder sb, string columnName)
+    {
+        sb.AppendFormat(":{0}", columnName);
+    }
+
+    /// <summary>
+    /// Adds a column equality to a parameter.
+    /// </summary>
+    /// <param name="sb">The string builder  to append to.</param>
+    /// <param name="columnName">The column name.</param>
+    public void AppendColumnName(StringBuilder sb, string columnName)
+    {
+        sb.AppendFormat("\"{0}\"", columnName.ToUpper());
+    }
+
+    /// <summary>
+    /// Adds the name of a column.
+    /// </summary>
+    /// <param name="sb">The string builder  to append to.</param>
+    /// <param name="columnName">The column name.</param>
+    public void AppendColumnNameEqualsValue(StringBuilder sb, string columnName)
+    {
+        sb.AppendFormat("\"{0}\" = :{1}", columnName.ToUpper(), columnName);
+    }
+
+    /// <summary>
+    /// 获取分页 sql 语句
+    /// </summary>
+    /// <param name="sql">原始 sql 语句</param>
+    /// <param name="page">查询页码</param>
+    /// <param name="take">每页记录数</param>
+    /// <returns>分页查询 sql 语句</returns>
+    public string PagingBuild(string sql, long page, long take)
+    {
+        return $"SELECT * FROM(SELECT TAB_PAGED.*,ROWNUM PAGED_ROWNUM FROM ({sql.TrimEnd().Trim(';')}) TAB_PAGED WHERE ROWNUM <= {take * page}) WHERE PAGED_ROWNUM> {take * (page - 1)}";
+    }
+
+    /// <summary>
+    /// 获取分页查询总记录数 sql 语句
+    /// </summary>
+    /// <param name="sql">原始 sql 语句</param>
+    /// <returns>总记录数 sql 语句</returns>
+    public string PagingCountBuild(string sql)
+    {
+        return sql = $"SELECT COUNT(1) FROM ({sql.TrimEnd().Trim(';')}) TAB_PAGED_COUNT";
     }
 }
