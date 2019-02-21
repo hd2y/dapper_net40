@@ -19,7 +19,7 @@ namespace Dapper.Tests.Console
                 {
                     System.Console.WriteLine(Newtonsoft.Json.JsonConvert.SerializeObject(c, Newtonsoft.Json.Formatting.Indented));
                 };
-                OracleTests tests = new OracleTests("System.Data.OracleClient.OracleClientFactory, System.Data.OracleClient, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089", "Data Source=CRDS3DB_5;User Id=userhita170524;Password=hishita;");
+                OracleTests tests = new OracleTests("System.Data.OracleClient.OracleClientFactory, System.Data.OracleClient, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089", "***");
 
                 #region 实体CRUD测试
                 //string msg = string.Empty;
