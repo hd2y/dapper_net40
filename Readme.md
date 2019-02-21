@@ -376,20 +376,20 @@ Do you have a comprehensive list of examples?
 ---------------------
 Dapper has a comprehensive test suite in the [test project](https://github.com/StackExchange/Dapper/tree/master/Dapper.Tests).
 
-·ÖÖ§°æ±¾ËµÃ÷
+åˆ†æ”¯ç‰ˆæœ¬è¯´æ˜
 ---------------------
 
-### 1.0.2
-+ Ôö¼Ó·ÖÒ³²éÑ¯¡£
-+ ĞŞ¸´ Oracle Êı¾İ¿âÎŞ·¨Ê¹ÓÃ Dapper ²åÈëÊµÌå¡£
-  + Oracle ±äÁ¿°ó¶¨·ûºÅÎÊÌâ¡£
-  + Oracle ²»Ö§³Ö×ÔÔöÖ÷¼üÎÊÌâ¡£
+### 1.0.3
++ å¢åŠ åˆ†é¡µæŸ¥è¯¢ã€‚
++ ä¿®å¤ Oracle æ•°æ®åº“æ— æ³•ä½¿ç”¨ Dapper æ’å…¥å®ä½“ã€‚
+  + Oracle å˜é‡ç»‘å®šç¬¦å·é—®é¢˜ã€‚
+  + Oracle ä¸æ”¯æŒè‡ªå¢ä¸»é”®é—®é¢˜ã€‚
 
 ### 1.0.1
-+ Ôö¼Ó `CommandDefinition` µÄ `OnConstruction` ÊÂ¼ş£¬ÓÃÓÚ `SQL` ¼àÌı¡£
++ å¢åŠ  `CommandDefinition` çš„ `OnConstruction` äº‹ä»¶ï¼Œç”¨äº `SQL` ç›‘å¬ã€‚
 
 ### 1.0.0
-+ Ö§³Ö `net40`¡£
++ æ”¯æŒ `net40`ã€‚
 
 Who is using this?
 ---------------------
